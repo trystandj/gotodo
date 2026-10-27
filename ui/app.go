@@ -24,7 +24,7 @@ const (
 type menuItem struct {
 	label  string
 	filter functions.Status // used by list entries; "" means all tasks
-	action string           // "list", "add" or "quit"
+	action string           // "list", "add", "delete" or "quit"
 }
 
 var menuItems = []menuItem{
@@ -33,6 +33,7 @@ var menuItems = []menuItem{
 	{label: "View in progress", filter: functions.StatusInProgress, action: "list"},
 	{label: "View done", filter: functions.StatusDone, action: "list"},
 	{label: "Add a new task", action: "add"},
+	{label: "Delete a task", action: "delete"},
 	{label: "Quit", action: "quit"},
 }
 
@@ -74,6 +75,7 @@ type model struct {
 
 	input     textinput.Model
 	editingID string // empty when adding a new task
+	deleting  bool   // input screen is asking for the ID of a task to delete
 	returnTo  screen // where esc on the input screen goes back to
 
 	message string
@@ -139,6 +141,7 @@ func (m *model) openList(filter functions.Status) {
 
 func (m *model) openInput(editing *functions.Task) tea.Cmd {
 	m.editingID = ""
+	m.deleting = false
 	m.returnTo = m.screen
 	m.input.Reset()
 	m.input.Placeholder = "What needs to be done?"
@@ -149,6 +152,14 @@ func (m *model) openInput(editing *functions.Task) tea.Cmd {
 	}
 	m.screen = inputScreen
 	return m.input.Focus()
+}
+
+// openDeletePrompt asks for the ID of the task to delete.
+func (m *model) openDeletePrompt() tea.Cmd {
+	cmd := m.openInput(nil)
+	m.deleting = true
+	m.input.Placeholder = "Task ID, e.g. 3"
+	return cmd
 }
 
 func (m model) Init() tea.Cmd { return nil }
@@ -202,6 +213,9 @@ func (m model) updateMenu(msg tea.KeyMsg) (model, tea.Cmd) {
 		case "add":
 			m.filter = ""
 			return m, m.openInput(nil)
+		case "delete":
+			m.filter = ""
+			return m, m.openDeletePrompt()
 		case "quit":
 			return m, tea.Quit
 		}
@@ -296,6 +310,9 @@ func (m model) updateInput(msg tea.KeyMsg) (model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
+		if m.deleting {
+			return m.confirmDeleteByID(text)
+		}
 		if text == "" {
 			m.message, m.isErr = "Description cannot be empty", true
 			return m, nil
@@ -324,6 +341,29 @@ func (m model) updateInput(msg tea.KeyMsg) (model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// confirmDeleteByID selects the task with the given ID on the all-tasks list
+// and shows the delete confirmation for it.
+func (m model) confirmDeleteByID(id string) (model, tea.Cmd) {
+	id = strings.TrimPrefix(id, "#")
+	if id == "" {
+		m.message, m.isErr = "Enter the ID of the task to delete", true
+		return m, nil
+	}
+	m.filter = ""
+	m.reload()
+	for i, t := range m.tasks {
+		if t.Id == id {
+			m.input.Blur()
+			m.message = ""
+			m.cursor = i
+			m.screen = confirmScreen
+			return m, nil
+		}
+	}
+	m.message, m.isErr = fmt.Sprintf("Task #%s not found", id), true
+	return m, nil
 }
 
 func (m model) updateConfirm(msg tea.KeyMsg) (model, tea.Cmd) {
@@ -440,7 +480,7 @@ func (m model) menuView() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("↑/↓ move • enter select • 1-6 jump • q quit"))
+	b.WriteString(helpStyle.Render(fmt.Sprintf("↑/↓ move • enter select • 1-%d jump • q quit", len(menuItems))))
 	return b.String()
 }
 
@@ -520,11 +560,17 @@ func (m model) listView() string {
 
 func (m model) inputView() string {
 	title := "Add a new task"
-	if m.editingID != "" {
+	if m.deleting {
+		title = "Delete a task"
+	} else if m.editingID != "" {
 		title = "Edit task #" + m.editingID
 	}
 	content := subtitleStyle.Render(title) + "\n\n" + m.input.View()
-	return boxStyle.Render(content) + "\n\n" + helpStyle.Render("enter save • esc cancel")
+	help := "enter save • esc cancel"
+	if m.deleting {
+		help = "enter continue • esc cancel"
+	}
+	return boxStyle.Render(content) + "\n\n" + helpStyle.Render(help)
 }
 
 func (m model) confirmView() string {
