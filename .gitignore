@@ -1,0 +1,8 @@
+# Build output
+/todo
+/todo.exe
+
+# Personal task data
+functions/task.json
+tasks.json
+*.tmp
